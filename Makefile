@@ -6,5 +6,12 @@ OBJS += fork-accept.o
 %.o: %.c
 	$(CC) -c $(CCFLAGS) $< -o $@
 
-all: $(OBJS)
-	$(CC) $(LDFLAGS) $< -o fork-accept
+fork-accept: $(OBJS)
+	$(CC) $(LDFLAGS) $< -o $@
+
+clean:
+	rm -rf $(OBJS) fork-accept
+
+all: fork-accept
+
+.PHONY: all
