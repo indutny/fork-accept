@@ -13,6 +13,10 @@
 
 struct client_state {
   int fd;
+  int ended;
+  int written;
+  int trailing;
+  int write_off;
 };
 
 
@@ -33,17 +37,83 @@ void set_nonblock(int fd) {
 }
 
 
-void handle_client(int ep, struct epoll_event* ev) {
+int handle_client(int ep, struct epoll_event* ev) {
   struct client_state* state = ev->data.ptr;
+  const char* resp = "HTTP/1.1 200 Ok\r\n"
+                     "\r\n"
+                     "hello world";
   char buf[1024];
+  int size;
+  int r;
+  int i;
 
-  if (ev->events & EPOLLIN) {
+  if (!state->ended && (ev->events & EPOLLIN)) {
+    assert(!state->ended);
     fprintf(stdout, "[%d] client data in\n", pid);
+
+    /* Ignore all incoming data */
+    do {
+      r = read(state->fd, buf, sizeof(buf));
+
+      if (r > 0) {
+        for (i = 0; i < 4 && i < r; i++)
+          /* NOTE: Simplified check */
+          if (buf[i] != '\r' && buf[i] != '\n')
+            break;
+
+        if (state->trailing + i >= 4)
+          state->trailing = 4;
+        else {
+          state->trailing = 0;
+          for (i = r - 1; i >= 0 && i >= r - 4; i--) {
+            if (buf[i] != '\r' && buf[i] != '\n')
+              break;
+            state->trailing++;
+          }
+        }
+      }
+    } while (r > 0 || (r == -1 && errno == EINTR));
+
+    if (r == 0 || state->trailing == 4) {
+      state->ended = 1;
+      fprintf(stdout, "[%d] client input end\n", pid);
+    } else if (r == -1) {
+      assert(errno == EAGAIN);
+    }
   }
 
-  if (ev->events & EPOLLOUT) {
-    fprintf(stdout, "[%d] client data out\n", pid);
+  if (state->ended && !state->written && (ev->events & EPOLLOUT)) {
+    do {
+      size = strlen(resp) - state->write_off;
+      if (size == 0) {
+        state->written = 1;
+        fprintf(stdout, "[%d] client output end\n", pid);
+
+        /* Remove fd from epoll */
+        ev->data.ptr = state;
+        ev->events = EPOLLIN | EPOLLOUT;
+        r = epoll_ctl(ep, EPOLL_CTL_DEL, state->fd, ev);
+        assert(r == 0);
+        close(state->fd);
+        return 1;
+      }
+
+      r = write(state->fd,
+                resp + state->write_off,
+                size);
+      if (r == -1) {
+        if (errno == EINTR) continue;
+        assert(errno == EAGAIN);
+      } else if (r == 0) {
+        break;
+      } else {
+        fprintf(stdout, "[%d] client data out %d out of %d\n", pid, r, size);
+        state->write_off += r;
+      }
+    } while(0);
   }
+
+  return 0;
 }
 
 
@@ -71,6 +141,10 @@ void accept_connection(int ep, int server_fd) {
   state = malloc(sizeof(*state));
   assert(state != NULL);
   state->fd = fd;
+  state->ended = 0;
+  state->written = 0;
+  state->trailing = 0;
+  state->write_off = 0;
 
   /* Add fd to epoll */
   ev.data.ptr = state;
@@ -82,6 +156,7 @@ void accept_connection(int ep, int server_fd) {
 
 void fork_child(int server_fd) {
   int i;
+  int j;
   int r;
   int ep;
   struct epoll_event events[100];
@@ -109,13 +184,23 @@ void fork_child(int server_fd) {
     }
 
     for (i = 0; i < r; i++) {
+      /* Skip removed events */
+      if (events[i].data.ptr == &events[i])
+        continue;
+
       if (events[i].data.ptr == NULL)
         accept_connection(ep, server_fd);
       else
-        handle_client(ep, &events[i]);
+        if (handle_client(ep, &events[i])) {
+          for (j = i + 1; j < r; j++)
+            if (events[i].data.ptr == events[j].data.ptr)
+              events[j].data.ptr = &events[j];
+          free(events[i].data.ptr);
+        }
     }
   }
 }
+
 
 int main(int argc, char** argv) {
   int child_cnt;
