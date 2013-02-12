@@ -5,9 +5,19 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
+#include <sys/epoll.h>
 #include <netinet/in.h>
 #include <assert.h>
 #include <errno.h>
+
+
+struct client_state {
+  int fd;
+};
+
+
+static int pid;
+
 
 void set_nonblock(int fd) {
   int r;
@@ -22,17 +32,89 @@ void set_nonblock(int fd) {
   assert(r == 0);
 }
 
-void fork_child(int server_fd) {
+
+void handle_client(int ep, struct epoll_event* ev) {
+  struct client_state* state = ev->data.ptr;
+  char buf[1024];
+
+  if (ev->events & EPOLLIN) {
+    fprintf(stdout, "[%d] client data in\n", pid);
+  }
+
+  if (ev->events & EPOLLOUT) {
+    fprintf(stdout, "[%d] client data out\n", pid);
+  }
+}
+
+
+void accept_connection(int ep, int server_fd) {
+  int fd;
   int r;
+  struct client_state* state;
+  struct epoll_event ev;
+
+  do {
+    fd = accept(server_fd, NULL, NULL);
+    if (fd == -1) {
+      if (errno == EAGAIN)
+        return;
+      else if (errno == EINTR)
+        continue;
+    }
+  } while (0);
+
+  set_nonblock(fd);
+
+  fprintf(stdout, "[%d] accepted connection %d\n", pid, fd);
+
+  /* Allocate and init client's state */
+  state = malloc(sizeof(*state));
+  assert(state != NULL);
+  state->fd = fd;
+
+  /* Add fd to epoll */
+  ev.data.ptr = state;
+  ev.events = EPOLLIN | EPOLLOUT;
+  r = epoll_ctl(ep, EPOLL_CTL_ADD, fd, &ev);
+  assert(r == 0);
+}
+
+
+void fork_child(int server_fd) {
+  int i;
+  int r;
+  int ep;
+  struct epoll_event events[100];
 
   r = fork();
   assert(r != -1);
-
   if (!r) return;
 
-  fprintf(stdout, "[%d] child started\n", getpid());
+  pid = getpid();
+  fprintf(stdout, "[%d] child started\n", pid);
 
-  while (1) {}
+  ep = epoll_create(1);
+  assert(ep != -1);
+
+  events[0].events = EPOLLIN;
+  events[0].data.ptr = NULL;
+  r = epoll_ctl(ep, EPOLL_CTL_ADD, server_fd, events);
+  assert(r == 0);
+
+  while (1) {
+    r = epoll_wait(ep, events, sizeof(events) / sizeof(events[0]), -1);
+    if (r == -1) {
+      assert(errno == EINTR || errno == EAGAIN);
+      continue;
+    }
+
+    for (i = 0; i < r; i++) {
+      if (events[i].data.ptr == NULL)
+        accept_connection(ep, server_fd);
+      else
+        handle_client(ep, &events[i]);
+    }
+  }
 }
 
 int main(int argc, char** argv) {
@@ -72,6 +154,7 @@ int main(int argc, char** argv) {
   /* Start accepting connections */
   r = listen(fd, 1024);
   assert(r == 0);
+  set_nonblock(fd);
 
   /* Fork */
   for (i = 0; i < child_cnt; i++) {
