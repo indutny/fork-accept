@@ -4,8 +4,23 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/ioctl.h>
 #include <netinet/in.h>
 #include <assert.h>
+#include <errno.h>
+
+void set_nonblock(int fd) {
+  int r;
+  int set;
+
+  set = 1;
+
+  do
+    r = ioctl(fd, FIONBIO, &set);
+  while (r == -1 && errno == EINTR);
+
+  assert(r == 0);
+}
 
 void fork_child(int server_fd) {
   int r;
