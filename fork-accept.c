@@ -124,33 +124,31 @@ void accept_connection(int ep, int server_fd) {
   struct epoll_event ev;
 
   do {
-    fd = accept(server_fd, NULL, NULL);
+    fd = accept4(server_fd, NULL, NULL, SOCK_NONBLOCK);
     if (fd == -1) {
       if (errno == EAGAIN)
         return;
       else if (errno == EINTR)
         continue;
     }
-  } while (0);
 
-  set_nonblock(fd);
+    fprintf(stdout, "[%d] accepted connection %d\n", pid, fd);
 
-  fprintf(stdout, "[%d] accepted connection %d\n", pid, fd);
+    /* Allocate and init client's state */
+    state = malloc(sizeof(*state));
+    assert(state != NULL);
+    state->fd = fd;
+    state->ended = 0;
+    state->written = 0;
+    state->trailing = 0;
+    state->write_off = 0;
 
-  /* Allocate and init client's state */
-  state = malloc(sizeof(*state));
-  assert(state != NULL);
-  state->fd = fd;
-  state->ended = 0;
-  state->written = 0;
-  state->trailing = 0;
-  state->write_off = 0;
-
-  /* Add fd to epoll */
-  ev.data.ptr = state;
-  ev.events = EPOLLIN | EPOLLOUT;
-  r = epoll_ctl(ep, EPOLL_CTL_ADD, fd, &ev);
-  assert(r == 0);
+    /* Add fd to epoll */
+    ev.data.ptr = state;
+    ev.events = EPOLLIN | EPOLLOUT;
+    r = epoll_ctl(ep, EPOLL_CTL_ADD, fd, &ev);
+    assert(r == 0);
+  } while (1);
 }
 
 
