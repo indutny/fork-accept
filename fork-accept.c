@@ -163,7 +163,8 @@ void fork_child(int server_fd) {
 
   r = fork();
   assert(r != -1);
-  if (!r) return;
+  if (!r)
+    return;
 
   pid = getpid();
   fprintf(stdout, "[%d] child started\n", pid);
@@ -211,14 +212,12 @@ int main(int argc, char** argv) {
   struct sockaddr_in addr;
 
   child_cnt = 1;
-  if (argc > 1) {
+  if (argc > 1)
     child_cnt = atoi(argv[1]);
-  }
 
   port = 8000;
-  if (argc > 2) {
+  if (argc > 2)
     port = atoi(argv[2]);
-  }
 
   fprintf(stdout, "[%d] master started\n", getpid());
 
@@ -242,12 +241,8 @@ int main(int argc, char** argv) {
   set_nonblock(fd);
 
   /* Fork */
-  for (i = 0; i < child_cnt; i++) {
+  for (i = 0; i < child_cnt; i++)
     fork_child(fd);
-  }
-
-  /* Loop */
-  while (1) {}
 
   return 0;
 }
